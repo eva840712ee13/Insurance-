@@ -31,7 +31,7 @@ TARGETS = {
     "長照險": 300
 }
 
-def analyze_image(img, key):
+def def analyze_image(img, key):
     genai.configure(api_key=key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = """
@@ -40,8 +40,7 @@ def analyze_image(img, key):
     請只回傳 JSON 格式，例如：{"壽險": 100, "意外險": 50, "實支實付": 0, "重大傷病": 0, "癌症險": 0, "長照險": 0}。
     """
     response = model.generate_content([prompt, img])
-    clean_text = response.text.replace('```json', '').replace('
-```', '').strip()
+    clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
 
 def analyze_policy_names(text, key):
@@ -59,8 +58,9 @@ def analyze_policy_names(text, key):
     請只回傳 JSON 格式，例如：{{"壽險": 0, "意外險": 0, "實支實付": 0, "重大傷病": 100, "癌症險": 0, "長照險": 0}}。
     """
     response = model.generate_content(prompt)
-    clean_text = response.text.replace('```json', '').replace('```', '').strip()
+    clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
+
 
 # --- 主介面 ---
 st.title("🛡️ 新光人壽許家榛Lydia")
