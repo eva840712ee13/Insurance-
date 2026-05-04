@@ -1,181 +1,167 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-import pandas as pd
-import plotly.graph_objects as go
 import json
 
-# --- 網頁基礎配置 ---
-st.set_page_config(page_title="新光人壽許家榛Lydia - 專屬保單健檢", layout="centered")
+# --- 網頁基礎配置 (改為寬螢幕模式以容納報表) ---
+st.set_page_config(page_title="新光人壽許家榛Lydia - 專屬保單健檢", layout="wide")
 
+# --- 客製化 CSS (還原照片中的色塊與排版，並設定右上角品牌) ---
 st.markdown("""
     <style>
-    .main { background-color: #f5f7f9; }
-    .stButton>button { width: 100%; border-radius: 20px; background-color: #e74c3c; color: white; font-weight: bold;}
+    .main { background-color: #f4f6f7; }
+    .stButton>button { width: 100%; border-radius: 10px; background-color: #3498db; color: white; font-weight: bold;}
+    .brand-top-right { position: absolute; top: 0px; right: 20px; font-size: 18px; font-weight: bold; color: #2c3e50; z-index: 999;}
+    .report-title { text-align: center; font-size: 28px; font-weight: bold; background-color: #aed6f1; padding: 10px; border-radius: 10px; margin-bottom: 20px; color: #2c3e50;}
+    .box { padding: 15px; border-radius: 10px; margin-bottom: 20px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); height: 100%;}
+    .box-title { font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 15px; color: #333;}
+    .item-row { display: flex; justify-content: space-between; border-bottom: 1px dashed #ccc; padding: 5px 0; font-size: 14px;}
+    .item-name { color: #555; }
+    .item-value { font-weight: bold; color: #222; }
+    
+    /* 色塊定義 */
+    .bg-disease { background-color: #d5f5e3; } /* 疾病-綠 */
+    .bg-receipt { background-color: #fcf3cf; } /* 實支實付-黃 */
+    .bg-accident { background-color: #d1f2eb; } /* 意外-淺綠藍 */
+    .bg-critical { background-color: #d6eaf8; } /* 重大傷病-藍 */
+    .bg-surgery { background-color: #e8daef; } /* 手術-紫 */
+    .bg-cancer { background-color: #f5eef8; } /* 癌症-粉紫 */
+    .bg-ltc { background-color: #fef9e7; } /* 長照-淺黃 */
     </style>
+    
+    <!-- 右上角專屬品牌 -->
+    <div class="brand-top-right">新光人壽許家榛Lydia</div>
     """, unsafe_allow_html=True)
 
 # --- 側邊欄：設定 ---
 with st.sidebar:
     st.title("⚙️ 系統設定")
     api_key = st.text_input("請輸入 Gemini API Key", type="password")
-    st.info("💡 提示：輸入 API Key 後即可啟用 AI 照片辨識與保單名稱解析功能。")
+    st.info("輸入後即可啟用 AI 條款深度解析功能。")
 
-# --- 核心邏輯 ---
-TARGETS = {
-    "壽險": 500,
-    "意外險": 300,
-    "實支實付": 30,
-    "重大傷病": 100,
-    "癌症險": 200,
-    "長照險": 300
-}
-
+# --- AI 模型獲取 ---
 def get_working_model(key):
-    """自動尋找帳號內支援且可用的模型，徹底解決 404 找不到名字的問題"""
     genai.configure(api_key=key)
-    # 取得支援「生成內容」的模型清單
     available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    
-    # 優先嘗試幾種最常見且穩定的模型名稱
-    for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']:
+    for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro']:
         if preferred in available_models:
             return genai.GenerativeModel(preferred)
-            
-    # 如果以上都沒有，就直接抓清單裡的第一個可用模型
     if available_models:
         return genai.GenerativeModel(available_models[0])
+    raise Exception("無可用模型")
+
+# --- AI 解析核心指令 (升級為深度解析 JSON) ---
+JSON_FORMAT_PROMPT = """
+請務必只回傳純 JSON 格式，不要包含 ```json 標籤或任何 Markdown。
+JSON 結構必須嚴格如下：
+{
+  "讀取的保單與條款": ["保單名稱1", "保單名稱2..."],
+  "疾病": {"一般住院每天": "金額", "加護病房每天": "金額", "...": "..."},
+  "實支實付": {"住院病房限額每天": "金額", "每次醫療及雜項限額": "金額", "...": "..."},
+  "意外": {"身故或一級失能": "金額", "意外住院每天": "金額", "...": "..."},
+  "重大傷病": {"重大傷病一次領": "金額", "...": "..."},
+  "手術": {"門診手術每次": "金額", "一般住院手術每次": "金額", "...": "..."},
+  "癌症": {"初次罹患癌症一次領": "金額", "癌症住院每天": "金額", "...": "..."},
+  "長照失能": {"完全失能每年領": "金額", "失能生活照顧金每月": "金額", "...": "..."}
+}
+如果沒有該類別的資料，請保持空字典 {}。如果金額未知，請填 "依條款"。
+"""
+
+def analyze_with_ai(content, key, is_image=False):
+    model = get_working_model(key)
+    if is_image:
+        prompt = f"你是一位專業壽險顧問。請分析這張保單照片，並詳細提取各項理賠額度。\n{JSON_FORMAT_PROMPT}"
+        response = model.generate_content([prompt, content])
     else:
-        raise Exception("您的 API Key 中沒有可用的生成模型。")
-
-def analyze_image(img, key):
-    model = get_working_model(key)
-    prompt = """
-    你是一位保險專家。請分析這張保單照片，並提取以下險種的投保金額（單位：萬元）：
-    壽險、意外險、實支實付、重大傷病、癌症險、長照險。
-    請只回傳 JSON 格式，例如：{"壽險": 100, "意外險": 50, "實支實付": 0, "重大傷病": 0, "癌症險": 0, "長照險": 0}。
-    如果沒看到該險種，請填 0。
-    """
-    response = model.generate_content([prompt, img])
+        prompt = f"你是一位專業壽險顧問。客戶擁有以下保單：\n{content}\n請根據這些保單常見的條款內容，幫我整理出詳細的理賠額度。\n{JSON_FORMAT_PROMPT}"
+        response = model.generate_content(prompt)
+    
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
 
-def analyze_policy_names(text, key):
-    """將輸入的保單名稱與額度轉化為六大險種"""
-    model = get_working_model(key)
-    prompt = f"""
-    你是一位台灣的專業壽險顧問。客戶提供了以下保單名稱與額度：
-    {text}
-    
-    請幫我將這些保單的保障內容，歸類到以下六大險種中，並加總額度（單位：萬元）：
-    壽險、意外險、實支實付、重大傷病、癌症險、長照險。
-    (例如：輸入"新光人壽呵護安心重大傷病 100萬"，重大傷病就要填 100)
-    
-    請只回傳 JSON 格式，例如：{{"壽險": 0, "意外險": 0, "實支實付": 0, "重大傷病": 100, "癌症險": 0, "長照險": 0}}。
-    """
-    response = model.generate_content(prompt)
-    clean_text = response.text.replace("```json", "").replace("```", "").strip()
-    return json.loads(clean_text)
+# --- 渲染 HTML 卡片函數 ---
+def render_category_box(title, data_dict, bg_class):
+    html = f"<div class='box {bg_class}'><div class='box-title'>{title}</div>"
+    if not data_dict:
+        html += "<div class='item-row'><span class='item-name'>無相關保障</span><span class='item-value'>-</span></div>"
+    else:
+        for k, v in data_dict.items():
+            html += f"<div class='item-row'><span class='item-name'>{k}</span><span class='item-value'>{v}</span></div>"
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
 # --- 主介面 ---
-st.title("🛡️ 新光人壽許家榛Lydia")
-st.subheader("智慧保單健檢系統")
-st.write("透過 AI 快速分析您的保障缺口，為您量身打造防護網。")
+st.markdown("<div class='report-title'>2024 年度保單健檢報告書</div>", unsafe_allow_html=True)
 
-tab1, tab2, tab3 = st.tabs(["📝 輸入保單名稱", "📸 照片智能辨識", "✍️ 手動快速輸入"])
+tab1, tab2 = st.tabs(["📝 輸入保單名稱解析條款", "📸 拍攝既有總表解析"])
 
-if 'current_data' not in st.session_state:
-    st.session_state.current_data = {k: 0.0 for k in TARGETS.keys()}
+if 'report_data' not in st.session_state:
+    st.session_state.report_data = None
 
+# 頁籤 1: 文字輸入
 with tab1:
-    st.write("請輸入您現有的保單名稱與保額，AI 將自動為您分類。")
-    policy_text = st.text_area("例如：\n新光人壽活力平安傷害保險 200萬\n國泰人壽鍾心呵護重大傷病 100萬", height=150)
-    
-    if st.button("🧠 AI 智能分析保單"):
+    policy_text = st.text_area("請輸入客戶擁有的保單名稱 (AI 將自動調閱常見條款並整理細項)：", height=100)
+    if st.button("🧠 開始深度解析條款"):
         if api_key and policy_text:
-            with st.spinner("Lydia 的 AI 助手正在分析保單條款..."):
+            with st.spinner("正在調閱條款並生成細項報表..."):
                 try:
-                    result = analyze_policy_names(policy_text, api_key)
-                    for k, v in result.items():
-                        st.session_state.current_data[k] += float(v)
-                    st.success("✅ 保單分析並歸類成功！請點擊最下方按鈕查看報告。")
+                    st.session_state.report_data = analyze_with_ai(policy_text, api_key, is_image=False)
+                    st.success("解析完成！請往下查看報告。")
                 except Exception as e:
-                    st.error(f"分析失敗，錯誤：{e}")
-        elif not api_key:
-             st.warning("請先在左側欄位輸入 API Key。")
+                    st.error(f"解析失敗，錯誤：{e}")
         else:
-             st.warning("請輸入保單名稱與額度。")
+            st.warning("請輸入 API Key 與保單名稱。")
 
+# 頁籤 2: 圖片上傳
 with tab2:
-    uploaded_file = st.file_uploader("上傳保單總表照片", type=["jpg", "jpeg", "png"])
-    if st.button("📸 開始照片辨識"):
+    uploaded_file = st.file_uploader("上傳您手邊的保單總表或條款照片", type=["jpg", "jpeg", "png"])
+    if st.button("📸 開始照片深度解析"):
         if uploaded_file and api_key:
-            with st.spinner("Lydia 的 AI 助手正在閱讀照片..."):
+            with st.spinner("正在閱讀照片中的各項額度..."):
                 img = Image.open(uploaded_file)
-                st.image(img, caption="上傳的保單", use_column_width=True)
                 try:
-                    result = analyze_image(img, api_key)
-                    for k, v in result.items():
-                        st.session_state.current_data[k] += float(v)
-                    st.success("✅ 辨識成功！資料已加入。")
+                    st.session_state.report_data = analyze_with_ai(img, api_key, is_image=True)
+                    st.success("解析完成！請往下查看報告。")
                 except Exception as e:
                     st.error(f"辨識失敗：{e}")
-        elif not api_key:
-            st.warning("請先在左側欄位輸入 API Key。")
+        else:
+            st.warning("請上傳照片並輸入 API Key。")
 
-with tab3:
-    st.write("您可以直接手動微調各險種的總額（單位：萬元）")
-    col1, col2 = st.columns(2)
-    for i, (key, val) in enumerate(TARGETS.items()):
-        with col1 if i % 2 == 0 else col2:
-            st.session_state.current_data[key] = st.number_input(
-                f"{key} 額度 (萬)", 
-                min_value=0.0, 
-                value=float(st.session_state.current_data[key]), 
-                step=10.0
-            )
+# --- 報表顯示區 ---
+st.divider()
 
-# --- 健檢分析結果 ---
-if st.button("📊 生成專屬健檢報告"):
-    st.divider()
-    st.header("📋 您的保障缺口分析")
+if st.session_state.report_data:
+    data = st.session_state.report_data
     
-    categories = list(TARGETS.keys())
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=[st.session_state.current_data[c] for c in categories],
-        theta=categories,
-        fill='toself',
-        name='您目前的保障',
-        line_color='#e74c3c'
-    ))
-    fig.add_trace(go.Scatterpolar(
-        r=[TARGETS[c] for c in categories],
-        theta=categories,
-        fill='none',
-        name='Lydia 建議標準',
-        line_color='#bdc3c7',
-        line_dash='dash'
-    ))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, max(TARGETS.values()) + 100])), showlegend=True)
-    st.plotly_chart(fig, use_container_width=True)
-
-    df_data = []
-    for key in TARGETS:
-        current = st.session_state.current_data[key]
-        target = TARGETS[key]
-        gap = max(0.0, target - current)
-        status = "✅ 充足" if gap <= 0 else f"⚠️ 缺口 {gap}萬"
-        df_data.append({"險種": key, "現有保障 (萬)": current, "建議額度 (萬)": target, "診斷結果": status})
-    
-    st.table(pd.DataFrame(df_data))
-    
-    st.subheader("💡 Lydia 的專業建議")
-    gaps = [k for k, v in TARGETS.items() if st.session_state.current_data[k] < v]
-    if gaps:
-        st.info(f"👉 經過系統精密計算，建議您優先補強的板塊為：**{', '.join(gaps)}**。")
-        st.write("在這個醫療自費項目變多的時代，實支實付與重大傷病是轉嫁龐大醫療開銷的關鍵。後續我們可以針對您的預算，討論最適合的補強方案。")
+    # 顯示讀取到的保單清單
+    st.subheader("📑 系統讀取之保單/條款清單")
+    policies = data.get("讀取的保單與條款", [])
+    if policies:
+        for p in policies:
+            st.markdown(f"- **{p}**")
     else:
-        st.success("太棒了！您的基礎防護網非常堅固。建議我們定期為您的保單做健康檢查，確保受益人設定與目前的人生階段相符。")
-
-st.caption("本系統分析結果僅供參考，實際理賠與保障內容須以保險單據與公司條款為準。")
+        st.write("未辨識到特定保單名稱。")
+    
+    st.write("---")
+    
+    # 排版：第一排 (疾病, 實支實付, 意外)
+    col1, col2, col3 = st.columns(3)
+    with col1: render_category_box("疾 病", data.get("疾病", {}), "bg-disease")
+    with col2: render_category_box("實支實付", data.get("實支實付", {}), "bg-receipt")
+    with col3: render_category_box("意 外", data.get("意外", {}), "bg-accident")
+    
+    # 排版：第二排 (重大傷病, 手術, 癌症)
+    col4, col5, col6 = st.columns(3)
+    with col4: render_category_box("重大傷病", data.get("重大傷病", {}), "bg-critical")
+    with col5: render_category_box("手 術", data.get("手術", {}), "bg-surgery")
+    with col6: render_category_box("癌 症", data.get("癌症", {}), "bg-cancer")
+    
+    # 排版：第三排 (長照失能)
+    col7, col8 = st.columns([1, 2]) # 調整比例讓排版更好看
+    with col7: render_category_box("長照 / 失能扶助", data.get("長照失能", {}), "bg-ltc")
+    with col8:
+        # 放一些總結或聲明
+        st.info("💡 **顧問提醒**\n\n以上細項為 AI 根據保單名稱或圖片解析之結果。實際理賠條件（如：手術倍數表、重大傷病範圍定義）仍須以保單正本與保險公司最新公告條款為準。")
+        st.success("若有任何缺口，我們可針對您的預算與人生階段，規劃最適合的補強方案。")
+else:
+    st.info("請於上方輸入資料或上傳照片，系統將在此為您生成全彩條款解析報表。")
