@@ -33,20 +33,23 @@ TARGETS = {
 
 def analyze_image(img, key):
     genai.configure(api_key=key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 這裡更新為 -latest
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
     prompt = """
     你是一位保險專家。請分析這張保單照片，並提取以下險種的投保金額（單位：萬元）：
     壽險、意外險、實支實付、重大傷病、癌症險、長照險。
     請只回傳 JSON 格式，例如：{"壽險": 100, "意外險": 50, "實支實付": 0, "重大傷病": 0, "癌症險": 0, "長照險": 0}。
     """
     response = model.generate_content([prompt, img])
-    clean_text = response.text.replace("```json", "").replace("```", "").strip()
+    clean_text = response.text.replace("```json", "").replace("
+```", "").strip()
     return json.loads(clean_text)
 
 def analyze_policy_names(text, key):
     """將輸入的保單名稱與額度轉化為六大險種"""
     genai.configure(api_key=key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 這裡也更新為 -latest
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
     prompt = f"""
     你是一位台灣的專業壽險顧問。客戶提供了以下保單名稱與額度：
     {text}
@@ -60,6 +63,7 @@ def analyze_policy_names(text, key):
     response = model.generate_content(prompt)
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
+
 
 
 # --- 主介面 ---
