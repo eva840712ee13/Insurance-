@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import json
 
-# --- 網頁基礎配置 (已加入專屬品牌) ---
+# --- 網頁基礎配置 ---
 st.set_page_config(page_title="新光人壽許家榛Lydia - 專屬保單健檢", layout="centered")
 
 st.markdown("""
@@ -33,22 +33,23 @@ TARGETS = {
 
 def analyze_image(img, key):
     genai.configure(api_key=key)
-    # 這裡更新為 -latest
+    # 使用 latest 確保抓到最新支援的模型
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
     prompt = """
     你是一位保險專家。請分析這張保單照片，並提取以下險種的投保金額（單位：萬元）：
     壽險、意外險、實支實付、重大傷病、癌症險、長照險。
     請只回傳 JSON 格式，例如：{"壽險": 100, "意外險": 50, "實支實付": 0, "重大傷病": 0, "癌症險": 0, "長照險": 0}。
+    如果沒看到該險種，請填 0。
     """
     response = model.generate_content([prompt, img])
-    clean_text = response.text.replace("```json", "").replace("
-```", "").strip()
+    # 確保字串處理在同一行，避免被截斷
+    clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
 
 def analyze_policy_names(text, key):
     """將輸入的保單名稱與額度轉化為六大險種"""
     genai.configure(api_key=key)
-    # 這裡也更新為 -latest
+    # 使用 latest 確保抓到最新支援的模型
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
     prompt = f"""
     你是一位台灣的專業壽險顧問。客戶提供了以下保單名稱與額度：
@@ -61,20 +62,17 @@ def analyze_policy_names(text, key):
     請只回傳 JSON 格式，例如：{{"壽險": 0, "意外險": 0, "實支實付": 0, "重大傷病": 100, "癌症險": 0, "長照險": 0}}。
     """
     response = model.generate_content(prompt)
+    # 確保字串處理在同一行，避免被截斷
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
-
-
 
 # --- 主介面 ---
 st.title("🛡️ 新光人壽許家榛Lydia")
 st.subheader("智慧保單健檢系統")
 st.write("透過 AI 快速分析您的保障缺口，為您量身打造防護網。")
 
-# 新增了三個頁籤
 tab1, tab2, tab3 = st.tabs(["📝 輸入保單名稱", "📸 照片智能辨識", "✍️ 手動快速輸入"])
 
-# 初始化或讀取暫存的資料
 if 'current_data' not in st.session_state:
     st.session_state.current_data = {k: 0.0 for k in TARGETS.keys()}
 
@@ -131,7 +129,6 @@ if st.button("📊 生成專屬健檢報告"):
     st.divider()
     st.header("📋 您的保障缺口分析")
     
-    # 雷達圖分析
     categories = list(TARGETS.keys())
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
@@ -152,7 +149,6 @@ if st.button("📊 生成專屬健檢報告"):
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, max(TARGETS.values()) + 100])), showlegend=True)
     st.plotly_chart(fig, use_container_width=True)
 
-    # 缺口細節
     df_data = []
     for key in TARGETS:
         current = st.session_state.current_data[key]
@@ -163,7 +159,6 @@ if st.button("📊 生成專屬健檢報告"):
     
     st.table(pd.DataFrame(df_data))
     
-    # 專業建議
     st.subheader("💡 Lydia 的專業建議")
     gaps = [k for k, v in TARGETS.items() if st.session_state.current_data[k] < v]
     if gaps:
