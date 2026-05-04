@@ -25,16 +25,31 @@ with st.sidebar:
 TARGETS = {
     "壽險": 500,
     "意外險": 300,
-    "實支實付": 20,
+    "實支實付": 30,
     "重大傷病": 100,
     "癌症險": 200,
     "長照險": 300
 }
 
-def analyze_image(img, key):
+def get_working_model(key):
+    """自動尋找帳號內支援且可用的模型，徹底解決 404 找不到名字的問題"""
     genai.configure(api_key=key)
-    # 使用 latest 確保抓到最新支援的模型
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    # 取得支援「生成內容」的模型清單
+    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    
+    # 優先嘗試幾種最常見且穩定的模型名稱
+    for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']:
+        if preferred in available_models:
+            return genai.GenerativeModel(preferred)
+            
+    # 如果以上都沒有，就直接抓清單裡的第一個可用模型
+    if available_models:
+        return genai.GenerativeModel(available_models[0])
+    else:
+        raise Exception("您的 API Key 中沒有可用的生成模型。")
+
+def analyze_image(img, key):
+    model = get_working_model(key)
     prompt = """
     你是一位保險專家。請分析這張保單照片，並提取以下險種的投保金額（單位：萬元）：
     壽險、意外險、實支實付、重大傷病、癌症險、長照險。
@@ -42,15 +57,12 @@ def analyze_image(img, key):
     如果沒看到該險種，請填 0。
     """
     response = model.generate_content([prompt, img])
-    # 確保字串處理在同一行，避免被截斷
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
 
 def analyze_policy_names(text, key):
     """將輸入的保單名稱與額度轉化為六大險種"""
-    genai.configure(api_key=key)
-    # 使用 latest 確保抓到最新支援的模型
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = get_working_model(key)
     prompt = f"""
     你是一位台灣的專業壽險顧問。客戶提供了以下保單名稱與額度：
     {text}
@@ -62,7 +74,6 @@ def analyze_policy_names(text, key):
     請只回傳 JSON 格式，例如：{{"壽險": 0, "意外險": 0, "實支實付": 0, "重大傷病": 100, "癌症險": 0, "長照險": 0}}。
     """
     response = model.generate_content(prompt)
-    # 確保字串處理在同一行，避免被截斷
     clean_text = response.text.replace("```json", "").replace("```", "").strip()
     return json.loads(clean_text)
 
@@ -89,7 +100,7 @@ with tab1:
                         st.session_state.current_data[k] += float(v)
                     st.success("✅ 保單分析並歸類成功！請點擊最下方按鈕查看報告。")
                 except Exception as e:
-                    st.error(f"分析失敗，請檢查格式或 API Key。錯誤：{e}")
+                    st.error(f"分析失敗，錯誤：{e}")
         elif not api_key:
              st.warning("請先在左側欄位輸入 API Key。")
         else:
