@@ -31,7 +31,7 @@ TARGETS = {
     "長照險": 300
 }
 
-def def analyze_image(img, key):
+def analyze_image(img, key):
     genai.configure(api_key=key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = """
